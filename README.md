@@ -5,7 +5,7 @@ Static byte buffers for embedded systems.
 ## Example
 
 ```rust
-static POOL: Lazy<Pool> = Lazy::new(|| pool![[u8; 8]; 2]);
+static POOL: Pool = pool![[u8; 8]; 2];
 
 fn main() {
     let buffer = POOL.get().expect("no more buffers available");
