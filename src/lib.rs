@@ -27,9 +27,7 @@ pub use pool::*;
 
 #[test]
 fn pool_get() {
-    use once_cell::sync::Lazy;
-
-    static POOL: Lazy<Pool> = Lazy::new(|| pool![[u8; 8]; 2]);
+    static POOL: Pool = pool![[u8; 8]; 2];
 
     let buffer_1 = POOL.get();
     let buffer_2 = POOL.get();
@@ -53,9 +51,7 @@ fn pool_get() {
 
 #[test]
 fn buffer_extend_from_slice() {
-    use once_cell::sync::Lazy;
-
-    static POOL: Lazy<Pool> = Lazy::new(|| pool![[u8; 8]; 2]);
+    static POOL: Pool = pool![[u8; 8]; 2];
 
     let mut buffer = POOL.get().unwrap();
 
@@ -75,9 +71,7 @@ fn buffer_extend_from_slice() {
 
 #[test]
 fn buffer_resize() {
-    use once_cell::sync::Lazy;
-
-    static POOL: Lazy<Pool> = Lazy::new(|| pool![[u8; 8]; 2]);
+    static POOL: Pool = pool![[u8; 8]; 2];
 
     let mut buffer = POOL.get().unwrap();
 

@@ -36,12 +36,12 @@ impl DerefMut for Buffer {
 impl Buffer {
     /// Get a reference to the slice backing the buffer.
     unsafe fn slice(&self) -> &[u8] {
-        &(*self.pool).backing[self.data..]
+        &Pool::slice(self.pool)[self.data..]
     }
 
     /// Get a mutable reference to the slice backing the buffer.
     unsafe fn slice_mut(&mut self) -> &mut [u8] {
-        &mut (*self.pool).backing[self.data..]
+        &mut Pool::slice_mut(self.pool)[self.data..]
     }
 
     /// Returns the capacity of the buffer.
