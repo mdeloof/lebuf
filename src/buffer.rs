@@ -1,14 +1,18 @@
+use core::cell::UnsafeCell;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::Ordering;
 use std::mem::transmute;
 
-use crate::{Error, Pool};
+use crate::{Error, Inner};
 
 pub struct Buffer {
+    /// The starting index of the slice backing the buffer.
     pub(crate) data: usize,
+    /// The length of this buffer.
     pub(crate) len: usize,
-    pub(crate) pool: *mut Pool,
+    /// The memory pool of which this buffer is part of.
+    pub(crate) pool: &'static UnsafeCell<Inner>,
 }
 
 impl core::fmt::Debug for Buffer {
@@ -22,31 +26,42 @@ impl Deref for Buffer {
 
     fn deref(&self) -> &Self::Target {
         let len = self.len;
-        unsafe { &self.slice()[..len] }
+        &self.slice()[..len]
     }
 }
 
 impl DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let len = self.len;
-        unsafe { &mut self.slice_mut()[..len] }
+        &mut self.slice_mut()[..len]
     }
 }
 
 impl Buffer {
+    /// Create a new buffer.
+    pub(crate) fn new(data: usize, pool: &'static UnsafeCell<Inner>) -> Self {
+        Buffer { data, len: 0, pool }
+    }
+
     /// Get a reference to the slice backing the buffer.
-    unsafe fn slice(&self) -> &[u8] {
-        &Pool::slice(self.pool)[self.data..]
+    fn slice(&self) -> &[u8] {
+        unsafe {
+            let data = ((*self.pool.get()).backing)(self.data);
+            core::slice::from_raw_parts(data, (*self.pool.get()).capacity)
+        }
     }
 
     /// Get a mutable reference to the slice backing the buffer.
-    unsafe fn slice_mut(&mut self) -> &mut [u8] {
-        &mut Pool::slice_mut(self.pool)[self.data..]
+    fn slice_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            let data = ((*self.pool.get()).backing)(self.data);
+            core::slice::from_raw_parts_mut(data, (*self.pool.get()).capacity)
+        }
     }
 
     /// Returns the capacity of the buffer.
     pub fn capacity(&self) -> usize {
-        unsafe { (*self.pool).capacity }
+        unsafe { (*self.pool.get()).capacity }
     }
 
     /// Returns the length of the buffer.
@@ -114,7 +129,7 @@ impl Buffer {
             Ok(())
         } else if size <= self.capacity() {
             let len = self.len;
-            for byte in unsafe { &mut self.slice_mut()[len..size] } {
+            for byte in &mut self.slice_mut()[len..size] {
                 *byte = 0x00;
             }
             self.len = size;
@@ -122,7 +137,7 @@ impl Buffer {
         } else {
             let len = self.len;
             let capacity = self.capacity();
-            for byte in unsafe { &mut self.slice_mut()[len..capacity] } {
+            for byte in &mut self.slice_mut()[len..capacity] {
                 *byte = 0x00;
             }
             self.len = capacity;
@@ -138,7 +153,7 @@ impl Buffer {
         let added_len = remaining_capacity.min(required_capacity);
         let old_len = self.len();
         let new_len = self.len() + added_len;
-        let slice = unsafe { &mut self.slice_mut()[old_len..new_len] };
+        let slice = &mut self.slice_mut()[old_len..new_len];
         slice.clone_from_slice(&other[..added_len]);
         self.len = new_len;
         if remaining_capacity >= required_capacity {
@@ -151,16 +166,16 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        let mut free = unsafe { (*self.pool).free.load(Ordering::Acquire) };
+        let mut free = unsafe { (*self.pool.get()).free.load(Ordering::Acquire) };
 
         loop {
-            let slice = unsafe { &mut self.slice_mut()[..size_of::<usize>()] };
+            let slice = &mut self.slice_mut()[..size_of::<usize>()];
             slice.clone_from_slice(&free.to_le_bytes());
 
             let new_free = self.data;
 
             match unsafe {
-                (*self.pool).free.compare_exchange(
+                (*self.pool.get()).free.compare_exchange(
                     free,
                     new_free,
                     Ordering::Release,

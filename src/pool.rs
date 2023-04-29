@@ -1,32 +1,21 @@
+use core::cell::UnsafeCell;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::Buffer;
+use crate::{Buffer, Inner};
 
 pub struct Pool {
-    /// The raw pointer to the slice backing the buffer.
-    pub(crate) backing: *mut u8,
-    /// The length of the slice backing the buffer.
-    pub(crate) backing_len: usize,
-    /// The capacity of a single buffer.
-    pub(crate) capacity: usize,
-    /// The index of the first free buffer.
-    pub(crate) free: AtomicUsize,
-    /// The index of the next buffer to be initialized.
-    pub(crate) init: AtomicUsize,
+    inner: UnsafeCell<Inner>,
 }
 
-unsafe impl Sync for Pool {}
-
 impl Pool {
-    /// Get a reference to the slice backing the buffers.
-    pub(crate) fn slice(pool: *const Self) -> &'static [u8] {
-        unsafe { core::slice::from_raw_parts((*pool).backing, (*pool).backing_len) }
-    }
-
-    /// Get a mutable reference to the slice backing the buffers.
-    pub(crate) fn slice_mut(pool: *mut Self) -> &'static mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut((*pool).backing, (*pool).backing_len) }
+    /// For a given index, get the next index.
+    ///
+    /// # Safety
+    ///
+    /// The index that is being passed needs to be part of the linked list of free buffers.
+    unsafe fn next(&self, data: usize) -> usize {
+        (((*self.inner.get()).backing)(data) as *const usize).read_unaligned()
     }
 
     /// Create a new pool
@@ -34,69 +23,83 @@ impl Pool {
     /// # Safety
     ///
     /// `backing` raw pointer must point to a static byte array with length `backing_len`.
-    pub const unsafe fn new(backing: *mut u8, backing_len: usize, capacity: usize) -> Self {
+    pub const unsafe fn new(
+        backing: fn(usize) -> *mut u8,
+        backing_len: usize,
+        capacity: usize,
+    ) -> Self {
         assert!(capacity >= size_of::<usize>());
 
         Self {
-            backing,
-            backing_len,
-            capacity,
-            free: AtomicUsize::new(usize::MAX),
-            init: AtomicUsize::new(0),
+            inner: UnsafeCell::new(Inner {
+                backing,
+                backing_len,
+                capacity,
+                free: AtomicUsize::new(usize::MAX),
+                init: AtomicUsize::new(0),
+            }),
         }
     }
 
-    /// Get a free buffer.
+    /// Get a buffer. Returns `None` if there are no available buffers.
     pub fn get(&'static self) -> Option<Buffer> {
-        let mut init = self.init.load(Ordering::Relaxed);
+        unsafe {
+            // Get the init data index. This can be done with `Relaxed` memory ordering
+            // because there are no other changes that we need to acquire.
+            let mut init = (*self.inner.get()).init.load(Ordering::Relaxed);
 
-        loop {
-            if init < self.backing_len {
-                let next_init = init + self.capacity;
+            let backing_len = (*self.inner.get()).backing_len;
 
-                match self.init.compare_exchange(
-                    init,
-                    next_init,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(data) => {
-                        return {
-                            Some(Buffer {
-                                data,
-                                len: 0,
-                                pool: self as *const Self as *mut Self,
-                            })
-                        }
+            loop {
+                // Check if the init index is smaller than the length of the backing array.
+                if init < backing_len {
+                    // Calculate the next init index.
+                    let next_init = init + (*self.inner.get()).capacity;
+
+                    // Swap the init index with next init index. This can be done with
+                    // `Relaxed` memory ordering because there are no other changes we need
+                    // to release or acquire.
+                    match (*self.inner.get()).init.compare_exchange(
+                        init,
+                        next_init,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        // The swap succeeded so we create the buffer.
+                        Ok(data) => return Some(Buffer::new(data, &self.inner)),
+                        // The swap failed so we get the next init and try again.
+                        Err(next_init) => init = next_init,
                     }
-                    Err(next_init) => init = next_init,
-                }
-            } else {
-                let mut free = self.free.load(Ordering::Acquire);
+                // The init index is greater than the backing array, so all
+                // buffers are now part of the linked list of free buffers.
+                } else {
+                    // Get the free data index. This is done with `Acquire` memory ordering
+                    // because we need to make sure the next free index contained inside
+                    // the slice is correct.
+                    let mut free = (*self.inner.get()).free.load(Ordering::Acquire);
 
-                loop {
-                    if free < self.backing_len {
-                        let next_free =
-                            &Self::slice(self as *const Self)[free..free + size_of::<usize>()];
-                        let next_free = usize::from_le_bytes(next_free.try_into().unwrap());
+                    loop {
+                        // Check if the free index is smaller than the length of the backing array.
+                        if free < backing_len {
+                            // Get the index of the next free slice.
+                            let next_free = self.next(free);
 
-                        match self.free.compare_exchange(
-                            free,
-                            next_free,
-                            Ordering::Release,
-                            Ordering::Acquire,
-                        ) {
-                            Ok(data) => {
-                                return Some(Buffer {
-                                    data,
-                                    len: 0,
-                                    pool: self as *const Self as *mut Self,
-                                })
+                            // Replace the free index with the next free index. In case this swap
+                            // fails we'll acquire all other changes because we'll need to get a
+                            // new next free index.
+                            match (*self.inner.get()).free.compare_exchange(
+                                free,
+                                next_free,
+                                Ordering::Relaxed,
+                                Ordering::Acquire,
+                            ) {
+                                Ok(data) => return Some(Buffer::new(data, &self.inner)),
+                                Err(new_free) => free = new_free,
                             }
-                            Err(new_free) => free = new_free,
+                        // No buffers are available.
+                        } else {
+                            return None;
                         }
-                    } else {
-                        return None;
                     }
                 }
             }
@@ -104,12 +107,31 @@ impl Pool {
     }
 }
 
+unsafe impl Sync for Pool {}
+
+/// Macro to create a memory pool.
+///
+/// This is the recomended way to define a buffer pool and should be
+///
+/// ```
+/// # use lebuf::{Pool, pool};
+/// // Create a buffer pool with 16 buffers that each have a capacity of 256 bytes.
+/// static POOL: Pool = pool![[u8; 256]; 16];
+/// ```
 #[macro_export]
 macro_rules! pool {
     [[u8; $capacity:literal]; $count:literal] => {
         {
-            static mut BUFFER: [u8; $capacity * $count] =  [0x00; $capacity * $count];
-            unsafe { Pool::new( &BUFFER[0] as *const u8 as *mut u8, BUFFER.len(), $capacity ) }
+            unsafe {
+                Pool::new(
+                    |data: usize| {
+                        static mut ARRAY: [u8; $capacity * $count] = [0x00; $capacity * $count];
+                        (core::ptr::addr_of_mut!(ARRAY) as *mut u8).add(data)
+                    },
+                    $capacity * $count,
+                    $capacity
+                )
+            }
         }
     };
 }

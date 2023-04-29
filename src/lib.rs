@@ -19,10 +19,12 @@
 
 mod buffer;
 mod error;
+mod inner;
 mod pool;
 
 pub use buffer::*;
 pub use error::*;
+pub use inner::*;
 pub use pool::*;
 
 #[test]
@@ -97,4 +99,46 @@ fn buffer_resize() {
         buffer.as_ref(),
         &[0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
     );
+}
+
+#[test]
+fn multi_threaded() {
+    use std::thread::{sleep, spawn};
+    use std::time::Duration;
+
+    static POOL: Pool = pool![[u8; 8]; 2000];
+
+    let handles: Vec<_> = (0..100)
+        .map(|_| {
+            spawn(move || {
+                let buffer_1 = POOL.get();
+
+                sleep(Duration::from_millis(10));
+
+                let buffer_2 = POOL.get();
+
+                sleep(Duration::from_millis(10));
+
+                assert!(matches!(buffer_1, Some(_)));
+                assert!(matches!(buffer_2, Some(_)));
+
+                let mut buffer_1 = buffer_1.unwrap();
+                let mut buffer_2 = buffer_2.unwrap();
+
+                buffer_1
+                    .extend_from_slice(&[0x01, 0x03, 0x04, 0x05])
+                    .unwrap();
+                buffer_2
+                    .extend_from_slice(&[0x10, 0x02, 0x44, 0x03])
+                    .unwrap();
+
+                assert_eq!(buffer_1.as_ref(), &[0x01, 0x03, 0x04, 0x05]);
+                assert_eq!(buffer_2.as_ref(), &[0x10, 0x02, 0x44, 0x03]);
+            })
+        })
+        .collect();
+
+    handles
+        .into_iter()
+        .for_each(|handle| handle.join().unwrap());
 }
