@@ -1,6 +1,7 @@
 use core::sync::atomic::AtomicUsize;
 
-pub struct Inner {
+/// Inner data structure that is referenced by the buffers.
+pub(crate) struct Inner {
     /// Method to get a raw pointer to a backing slice for a given index.
     pub(crate) backing: fn(usize) -> *mut u8,
     /// The length of the slice backing the buffer.

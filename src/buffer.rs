@@ -6,6 +6,7 @@ use std::mem::transmute;
 
 use crate::{Error, Inner};
 
+/// A statically allocated buffer.
 pub struct Buffer {
     /// The starting index of the slice backing the buffer.
     pub(crate) data: usize,
@@ -101,19 +102,19 @@ impl Buffer {
     /// capacity of the buffer, an error is returned.
     pub fn push(&mut self, byte: u8) -> Result<(), Error> {
         if self.len < self.capacity() {
-            self.len += 1;
             let len = self.len;
-            self[len] = byte;
+            self.slice_mut()[len] = byte;
+            self.len += 1;
             Ok(())
         } else {
             Err(Error::WriteZero)
         }
     }
 
-    /// Pop the last byte from the buffer. If the buffer is empty `None` is returned.
+    /// Pop the last byte from the buffer. If the buffer is empty, `None` is returned.
     pub fn pop(&mut self) -> Option<u8> {
         if self.len > 0 {
-            let byte = self[self.len];
+            let byte = self[self.len - 1];
             self.len -= 1;
             Some(byte)
         } else {

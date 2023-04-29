@@ -4,6 +4,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{Buffer, Inner};
 
+static ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+
+/// A memory pool that hands out statically allocated buffers.
 pub struct Pool {
     inner: UnsafeCell<Inner>,
 }
@@ -16,6 +19,16 @@ impl Pool {
     /// The index that is being passed needs to be part of the linked list of free buffers.
     unsafe fn next(&self, data: usize) -> usize {
         (((*self.inner.get()).backing)(data) as *const usize).read_unaligned()
+    }
+
+    /// Get the length of the backing array.
+    fn backing_len(&self) -> usize {
+        unsafe { (*self.inner.get()).backing_len }
+    }
+
+    /// Get the capacity of the buffer capacity.
+    fn buffer_capacity(&self) -> usize {
+        unsafe { (*self.inner.get()).capacity }
     }
 
     /// Create a new pool
@@ -43,63 +56,71 @@ impl Pool {
 
     /// Get a buffer. Returns `None` if there are no available buffers.
     pub fn get(&'static self) -> Option<Buffer> {
-        unsafe {
-            // Get the init data index. This can be done with `Relaxed` memory ordering
-            // because there are no other changes that we need to acquire.
-            let mut init = (*self.inner.get()).init.load(Ordering::Relaxed);
+        // Get the init data index. This can be done with `Relaxed` memory ordering
+        // because there are no other changes that we need to acquire.
+        let mut init = unsafe { (*self.inner.get()).init.load(Ordering::Relaxed) };
 
-            let backing_len = (*self.inner.get()).backing_len;
+        loop {
+            // Check if the init index is smaller than the length of the backing array.
+            if init < self.backing_len() {
+                // Calculate the next init index.
+                let next_init = init + self.buffer_capacity();
 
-            loop {
-                // Check if the init index is smaller than the length of the backing array.
-                if init < backing_len {
-                    // Calculate the next init index.
-                    let next_init = init + (*self.inner.get()).capacity;
-
-                    // Swap the init index with next init index. This can be done with
-                    // `Relaxed` memory ordering because there are no other changes we need
-                    // to release or acquire.
-                    match (*self.inner.get()).init.compare_exchange(
+                // Swap the init index with next init index. This can be done with
+                // `Relaxed` memory ordering because there are no other changes we need
+                // to release or acquire.
+                match unsafe {
+                    (*self.inner.get()).init.compare_exchange(
                         init,
                         next_init,
                         Ordering::Relaxed,
                         Ordering::Relaxed,
-                    ) {
-                        // The swap succeeded so we create the buffer.
-                        Ok(data) => return Some(Buffer::new(data, &self.inner)),
-                        // The swap failed so we get the next init and try again.
-                        Err(next_init) => init = next_init,
+                    )
+                } {
+                    // The swap succeeded so we create the buffer.
+                    Ok(data) => return Some(Buffer::new(data, &self.inner)),
+                    // The swap failed so we get the next init and try again.
+                    Err(next_init) => {
+                        init = next_init;
+                        ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                        dbg!(&ATTEMPTS);
                     }
-                // The init index is greater than the backing array, so all
-                // buffers are now part of the linked list of free buffers.
-                } else {
-                    // Get the free data index. This is done with `Acquire` memory ordering
-                    // because we need to make sure the next free index contained inside
-                    // the slice is correct.
-                    let mut free = (*self.inner.get()).free.load(Ordering::Acquire);
+                }
+            // The init index is greater than the backing array, so all
+            // buffers are now part of the linked list of free buffers.
+            } else {
+                // Get the free data index. This is done with `Acquire` memory ordering
+                // because we need to make sure the next free index contained inside
+                // the slice is correct.
+                let mut free = unsafe { (*self.inner.get()).free.load(Ordering::Acquire) };
 
-                    loop {
-                        // Check if the free index is smaller than the length of the backing array.
-                        if free < backing_len {
-                            // Get the index of the next free slice.
-                            let next_free = self.next(free);
+                loop {
+                    // Check if the free index is smaller than the length of the backing array.
+                    if free < self.backing_len() {
+                        // Get the index of the next free slice.
+                        let next_free = unsafe { self.next(free) };
 
-                            // Replace the free index with the next free index. In case this swap
-                            // fails we'll acquire all other changes because we'll need to get a
-                            // new next free index.
-                            match (*self.inner.get()).free.compare_exchange(
+                        // Replace the free index with the next free index. In case this swap
+                        // fails we'll acquire all other changes because we'll need to get a
+                        // new next free index.
+                        match unsafe {
+                            (*self.inner.get()).free.compare_exchange(
                                 free,
                                 next_free,
                                 Ordering::Relaxed,
                                 Ordering::Acquire,
-                            ) {
-                                Ok(data) => return Some(Buffer::new(data, &self.inner)),
-                                Err(new_free) => free = new_free,
+                            )
+                        } {
+                            Ok(data) => return Some(Buffer::new(data, &self.inner)),
+                            Err(new_free) => {
+                                free = new_free;
+                                ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                                dbg!(&ATTEMPTS);
                             }
-                        // No buffers are available.
-                        } else {
-                            return None;
                         }
+                    // No buffers are available.
+                    } else {
+                        return None;
                     }
                 }
             }
@@ -134,4 +155,7 @@ macro_rules! pool {
             }
         }
     };
+    [[$buffer_ty:ty; $capacity:literal]; $count:literal] => {
+        compile_error!("can only create buffers containing `u8`");
+    }
 }
