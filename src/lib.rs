@@ -201,6 +201,25 @@ fn buffer_pop() {
 }
 
 #[test]
+fn multiple_pools() {
+    static POOL1: Pool = pool![[u8; 8]; 2];
+    static POOL2: Pool = pool![[u8; 8]; 2];
+
+    let mut buffer1 = POOL1.get().unwrap();
+    let mut buffer2 = POOL2.get().unwrap();
+
+    buffer1
+        .extend_from_slice(&[0x01, 0x02, 0x03, 0x04])
+        .unwrap();
+    buffer2
+        .extend_from_slice(&[0x05, 0x06, 0x07, 0x08])
+        .unwrap();
+
+    assert_eq!(buffer1.as_ref(), &[0x01, 0x02, 0x03, 0x04]);
+    assert_eq!(buffer2.as_ref(), &[0x05, 0x06, 0x07, 0x08]);
+}
+
+#[test]
 fn multi_threaded() {
     use std;
     use std::thread::{sleep, spawn};
