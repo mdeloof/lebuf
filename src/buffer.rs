@@ -47,7 +47,7 @@ impl Buffer {
     /// Get a reference to the slice backing the buffer.
     fn slice(&self) -> &[u8] {
         unsafe {
-            let data = ((*self.pool.get()).backing)(self.data);
+            let data = ((*self.pool.get()).get_ptr)(self.data);
             core::slice::from_raw_parts(data, (*self.pool.get()).capacity)
         }
     }
@@ -55,7 +55,7 @@ impl Buffer {
     /// Get a mutable reference to the slice backing the buffer.
     fn slice_mut(&mut self) -> &mut [u8] {
         unsafe {
-            let data = ((*self.pool.get()).backing)(self.data);
+            let data = ((*self.pool.get()).get_ptr)(self.data);
             core::slice::from_raw_parts_mut(data, (*self.pool.get()).capacity)
         }
     }
@@ -167,24 +167,24 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        let mut free = unsafe { (*self.pool.get()).free.load(Ordering::Acquire) };
+        let mut linked = unsafe { (*self.pool.get()).linked.load(Ordering::Acquire) };
 
         loop {
             let slice = &mut self.slice_mut()[..size_of::<usize>()];
-            slice.clone_from_slice(&free.to_le_bytes());
+            slice.clone_from_slice(&linked.to_le_bytes());
 
-            let new_free = self.data;
+            let new_linked = self.data;
 
             match unsafe {
-                (*self.pool.get()).free.compare_exchange(
-                    free,
-                    new_free,
+                (*self.pool.get()).linked.compare_exchange(
+                    linked,
+                    new_linked,
                     Ordering::Release,
                     Ordering::Acquire,
                 )
             } {
                 Ok(_) => break,
-                Err(a) => free = a,
+                Err(new_linked) => linked = new_linked,
             }
         }
     }

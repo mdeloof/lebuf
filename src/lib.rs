@@ -5,6 +5,7 @@
 //! ## Example
 //!
 //! ```rust
+//! # use lebuf::{Pool, pool};
 //! // A buffer pool with 8 buffers, each with a capacity of 256 bytes.
 //! static POOL: Pool = pool![[u8; 256]; 8];
 //!
@@ -19,6 +20,8 @@
 //! }
 //! ```
 
+// # Implementation
+//
 // The buffer pool is backed by a contiguous slice of bytes. When a buffer is not in use
 // the first few bytes are used to point to the next buffer that is not use, creating a
 // singly linked list of free buffers. The last buffer in the chain will point to a buffer
