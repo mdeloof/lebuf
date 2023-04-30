@@ -83,7 +83,6 @@ impl Pool {
                     Err(next_init) => {
                         init = next_init;
                         ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-                        dbg!(&ATTEMPTS);
                     }
                 }
             // The init index is greater than the backing array, so all
@@ -115,7 +114,6 @@ impl Pool {
                             Err(new_free) => {
                                 free = new_free;
                                 ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-                                dbg!(&ATTEMPTS);
                             }
                         }
                     // No buffers are available.

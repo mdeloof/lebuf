@@ -1,10 +1,10 @@
 use core::cell::UnsafeCell;
 use core::mem::size_of;
+use core::mem::transmute;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::Ordering;
-use std::mem::transmute;
 
-use crate::{Error, Inner};
+use crate::Inner;
 
 /// A statically allocated buffer.
 pub struct Buffer {
@@ -17,7 +17,7 @@ pub struct Buffer {
 }
 
 impl core::fmt::Debug for Buffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list().entries(&self[..]).finish()
     }
 }
@@ -99,15 +99,16 @@ impl Buffer {
     }
 
     /// Push a single byte to the end of the buffer. If this would exceed the
-    /// capacity of the buffer, an error is returned.
-    pub fn push(&mut self, byte: u8) -> Result<(), Error> {
+    /// capacity of the buffer, an error is returned containing the byte that
+    /// could not be written.
+    pub fn push(&mut self, byte: u8) -> Result<(), u8> {
         if self.len < self.capacity() {
             let len = self.len;
             self.slice_mut()[len] = byte;
             self.len += 1;
             Ok(())
         } else {
-            Err(Error::WriteZero)
+            Err(byte)
         }
     }
 
@@ -122,9 +123,8 @@ impl Buffer {
         }
     }
 
-    /// Resize the buffer. Returns an error if the requested size exceeds the capacity of
-    /// the buffer.
-    pub fn resize(&mut self, size: usize) -> Result<(), Error> {
+    /// Resize the buffer. Returns an error with the number of bytes that could not be written.
+    pub fn resize(&mut self, size: usize) -> Result<(), usize> {
         if size < self.len {
             self.len = size;
             Ok(())
@@ -142,13 +142,13 @@ impl Buffer {
                 *byte = 0x00;
             }
             self.len = capacity;
-            Err(Error::WriteZero)
+            Err(size - capacity)
         }
     }
 
     /// Append the slice to the buffer. If this would exceed the capacity of the buffer,
-    /// the overflowing bytes will not be written and an error will be returned.
-    pub fn extend_from_slice(&mut self, other: &[u8]) -> Result<(), Error> {
+    /// an error will be returned containing a slice of the bytes that could not be written.
+    pub fn extend_from_slice<'a>(&mut self, other: &'a [u8]) -> Result<(), &'a [u8]> {
         let remaining_capacity = self.remaining();
         let required_capacity = other.len();
         let added_len = remaining_capacity.min(required_capacity);
@@ -160,7 +160,7 @@ impl Buffer {
         if remaining_capacity >= required_capacity {
             Ok(())
         } else {
-            Err(Error::WriteZero)
+            Err(&other[(new_len - old_len)..])
         }
     }
 }

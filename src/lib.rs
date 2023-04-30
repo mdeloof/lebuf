@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), no_std)]
+
 // The buffer pool is backed by a contiguous slice of bytes. When a buffer is not in use
 // the first few bytes are used to point to the next buffer that is not use, creating a
 // singly linked list of free buffers. The last buffer in the chain will point to a buffer
@@ -18,12 +20,10 @@
 // ```
 
 mod buffer;
-mod error;
 mod inner;
 mod pool;
 
 pub use buffer::*;
-pub use error::*;
 pub use pool::*;
 
 pub(crate) use inner::*;
@@ -180,8 +180,10 @@ fn buffer_pop() {
 
 #[test]
 fn multi_threaded() {
+    use std;
     use std::thread::{sleep, spawn};
     use std::time::Duration;
+    use std::vec::Vec;
 
     static POOL: Pool = pool![[u8; 8]; 2000];
 
