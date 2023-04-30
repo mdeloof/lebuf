@@ -1,6 +1,6 @@
 # lebuf
 
-Statically allocated byte buffers
+Lockless and statically allocated byte buffers
 
 ## Example
 
