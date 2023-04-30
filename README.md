@@ -1,6 +1,6 @@
 # lebuf
 
-Static byte buffers for embedded systems.
+Statically allocated byte buffers
 
 ## Example
 
@@ -14,7 +14,7 @@ fn main() {
 
     // Write a slice to the buffer.
     buffer.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]).unwrap();
-    
+
     assert_eq!(buffer.as_ref(), &[0x01, 0x02, 0x03, 0x04]);
 }
 ```
