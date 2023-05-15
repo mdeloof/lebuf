@@ -121,6 +121,7 @@ impl Pool {
 }
 
 unsafe impl Sync for Pool {}
+unsafe impl Send for Pool {}
 
 /// Macro to create a memory pool.
 ///
@@ -136,7 +137,7 @@ macro_rules! pool {
     [[u8; $capacity:literal]; $count:literal] => {
         {
             unsafe {
-                Pool::new(
+                $crate::Pool::new(
                     |data: usize| {
                         static mut ARRAY: [u8; $capacity * $count] = [0x00; $capacity * $count];
                         (core::ptr::addr_of_mut!(ARRAY) as *mut u8).add(data)

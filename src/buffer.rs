@@ -70,6 +70,14 @@ impl Buffer {
         self.len
     }
 
+    /// # Safety
+    ///
+    /// New length must be smaller than buffer capacity.
+    pub unsafe fn set_len(&mut self, len: usize) {
+        assert!(len <= self.capacity());
+        self.len = len;
+    }
+
     /// Returns `true` if the buffer is empty, i.e. its len is 0.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -189,3 +197,5 @@ impl Drop for Buffer {
         }
     }
 }
+
+unsafe impl Send for Buffer {}

@@ -15,3 +15,4 @@ pub(crate) struct Inner {
 }
 
 unsafe impl Sync for Inner {}
+unsafe impl Send for Inner {}
